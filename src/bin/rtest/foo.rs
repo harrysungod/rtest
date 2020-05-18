@@ -36,8 +36,8 @@ impl FooConnection {
     }
 
     pub fn get_data(&mut self) -> Result<Vec<Foo>, Box<dyn error::Error>> {
-        let mut data_sources: Vec<Foo> = Vec::new();
+        let dses: Vec<Foo> = Vec::new();
 
-        Ok(data_sources)
+        Ok(dses)
     }
 }
