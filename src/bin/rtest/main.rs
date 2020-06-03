@@ -1,12 +1,22 @@
-
-mod foo;
-mod bar;
+use deno_core::CoreIsolate;
+use deno_core::StartupData;
+use tokio;
 
 fn main() {
+    let startup_data = StartupData::Script(deno_core::Script {
+        source: "console.log(\"hello world\");",
+        filename: "helloworld.js",
+    });
 
-    let mut _foo = foo::FooConnection::new(String::from(""), String::from(""));
-    let data_sources = _foo.get_data().expect("Fetching data failed");
+    let core_isolate = CoreIsolate::new(startup_data, false);
 
-    println!("{:?}", data_sources);
+    let mut runtime = tokio::runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    runtime
+        .block_on(core_isolate)
+        .expect("unexpected isolate error");
 }
-

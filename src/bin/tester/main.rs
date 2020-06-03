@@ -2,14 +2,12 @@ use reqwest;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Debug, Serialize, Deserialize)]
 struct Ip {
     ip: String,
 }
 
 fn main() {
-
     let http_client = reqwest::blocking::Client::new();
     let url = "https://api.ipify.org/?format=json";
     let req = http_client.request(Method::GET, url);
