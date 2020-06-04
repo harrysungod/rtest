@@ -92,8 +92,8 @@ struct StateInner {
 impl Isolate {
     pub fn new() -> Self {
         let startup_data = StartupData::Script(Script {
-            source: "console.log(\"test1\");",
-            filename: "console_test.js",
+            source: include_str!("http_bench.js"),
+            filename: "http_bench.js",
         });
 
         let mut isolate = Self {
