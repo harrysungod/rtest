@@ -1,8 +1,5 @@
 use std::env;
 
-#[macro_use]
-extern crate log;
-
 struct Logger;
 
 impl log::Log for Logger {
