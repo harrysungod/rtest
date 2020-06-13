@@ -1,16 +1,20 @@
 use hyper::body;
+use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
 use std::cell::RefCell;
 use std::thread;
 use std::{convert::Infallible, net::SocketAddr};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
 
 mod request_generated;
 
-use hyper::body::Buf;
-
-async fn handle(req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    let mut builder = flatbuffers::FlatBufferBuilder::new_with_capacity(4096);
+async fn handle(
+    req: Request<Body>,
+    tx: &Sender<Box<flatbuffers::FlatBufferBuilder>>,
+) -> Result<Response<Body>, Infallible> {
+    let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
 
     let id = builder.create_string("");
     let method = builder.create_string(req.method().as_str());
@@ -45,9 +49,17 @@ async fn handle(req: Request<Body>) -> Result<Response<Body>, Infallible> {
 
 #[tokio::main]
 async fn main() {
+    let (tx, mut rx): (
+        Sender<Box<flatbuffers::FlatBufferBuilder>>,
+        Receiver<Box<flatbuffers::FlatBufferBuilder>>,
+    ) = mpsc::channel(100);
+
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
+    // let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
+    let make_svc = make_service_fn(|_conn| async {
+        Ok::<_, Infallible>(service_fn(|req: Request<Body>| handle(req, &tx)))
+    });
 
     let server = Server::bind(&addr).serve(make_svc);
 
