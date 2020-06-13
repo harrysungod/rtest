@@ -12,7 +12,7 @@ mod request_generated;
 
 async fn handle(
     req: Request<Body>,
-    tx: &Sender<Box<flatbuffers::FlatBufferBuilder>>,
+    tx: &mut Sender<Box<flatbuffers::FlatBufferBuilder>>,
 ) -> Result<Response<Body>, Infallible> {
     let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
 
@@ -40,9 +40,11 @@ async fn handle(
 
     builder.finish(buf, None);
 
-    let finished_data = builder.finished_data();
+    tx.send(builder);
 
-    let resp_message = format!("Marshalled to {} bytes\n", finished_data.len());
+    // let finished_data = builder.finished_data();
+    // let resp_message = format!("Marshalled to {} bytes\n", finished_data.len());
+    let resp_message = "OK";
 
     Ok(Response::new(resp_message.into()))
 }
@@ -58,7 +60,7 @@ async fn main() {
 
     // let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
     let make_svc = make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(service_fn(|req: Request<Body>| handle(req, &tx)))
+        Ok::<_, Infallible>(service_fn(|req: Request<Body>| handle(req, &mut tx)))
     });
 
     let server = Server::bind(&addr).serve(make_svc);
