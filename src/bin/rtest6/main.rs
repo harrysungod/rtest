@@ -1,88 +1,38 @@
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Request, Response, Server};
-use std::marker::PhantomData;
-use std::{convert::Infallible, net::SocketAddr};
+use hyper::{Body, Error, Request, Response, Server};
+use std::net::SocketAddr;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::{Receiver, Sender};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FlatBufferBuilder<'fbb> {
-    owned_buf: Vec<u8>,
-    head: usize,
-    _phantom: PhantomData<&'fbb ()>,
-}
+mod request_generated;
 
-impl<'fbb> FlatBufferBuilder<'fbb> {
-    /// Create a FlatBufferBuilder that is ready for writing.
-    pub fn new() -> Self {
-        Self::new_with_capacity(0)
-    }
+async fn handle(req: Request<Body>, mut tx: Sender<Vec<u8>>) -> Result<Response<Body>, Error> {
+    let test_data = vec![1, 2, 3];
 
-    /// Create a FlatBufferBuilder that is ready for writing, with a
-    /// ready-to-use capacity of the provided size.
-    ///
-    /// The maximum valid value is `FLATBUFFERS_MAX_BUFFER_SIZE`.
-    pub fn new_with_capacity(size: usize) -> Self {
-        FlatBufferBuilder {
-            owned_buf: vec![0u8; size],
-            head: size,
-            _phantom: PhantomData,
-        }
-    }
-}
-async fn handle(
-    req: Request<Body>,
-    mut tx: Sender<Box<FlatBufferBuilder<'_>>>,
-) -> Result<Response<Body>, Infallible> {
-    let mut builder = Box::new(FlatBufferBuilder::new_with_capacity(4096));
-
-    /*
-    let id = builder.create_string("");
-    let method = builder.create_string(req.method().as_str());
-    let uri = builder.create_string(&req.uri().to_string());
-    // figure out how to read raw header bytes
-    let headers = builder.create_string("");
-
-    let body = hyper::body::to_bytes::<Body>(req.into_body())
+    tx.send(test_data)
         .await
-        .expect("Reading body failed");
+        .expect("unable to write to channel");
 
-    let body = builder.create_vector::<u8>(body.bytes());
-
-    let buf = request_generated::fbr::Request::create(
-        &mut builder,
-        &request_generated::fbr::RequestArgs {
-            id: Some(id),
-            method: Some(method),
-            body: Some(body),
-            headers: Some(headers),
-            uri: Some(uri),
-        },
-    );
-
-    builder.finish(buf, None);
-    */
-
-    tx.send(builder).await.expect("Sending failed");
-
-    // let finished_data = builder.finished_data();
-    // let resp_message = format!("Marshalled to {} bytes\n", finished_data.len());
     let resp_message = "OK";
-
     Ok(Response::new(resp_message.into()))
+}
+
+async fn receiver(mut rx: Receiver<Vec<u8>>) {
+    println!("Starting receiver");
+
+    while let Some(finished_data) = rx.recv().await {
+        println!("Got {} bytes", finished_data.len());
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx): (
-        Sender<Box<FlatBufferBuilder>>,
-        Receiver<Box<FlatBufferBuilder>>,
-    ) = mpsc::channel(100);
-    // let tx = Box::leak(Box::new(tx));
+    let (tx, mut rx): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel(100);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    // let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
+    tokio::spawn(async move { receiver(rx) });
+
     let make_svc = make_service_fn(|_conn| {
         // we must clone the 'tx' to be something owned by the closure
         // the new `tx` will be tied to the scope of the closure and not to
@@ -97,13 +47,14 @@ async fn main() {
             // move keyword is very much required in the closure below
             // this function is called for each request. Needs a separate tx clone.
             //
-            // `move` keywords moves `tx` to inside closure. without it, 
+            // `move` keywords moves `tx` to inside closure. without it,
             // subsequent clones can't be made out of a reference that has disappeared
             //
             // Still a bit confused, but this is all I know at this point.
-            // `move` is required here, but why wasn't it required
-            // at ..... make_service_fn(|_conn|... closure..
-            Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
+            // `move` is required here, it won't compile without it (even if you
+            // add `move` to async block-start above, but why wasn't it required
+            // at ..... make_service_fn(|_conn|... closure..above?
+            Ok::<_, Error>(service_fn(move |req: Request<Body>| {
 
                 handle(req, tx.clone())
             }))
