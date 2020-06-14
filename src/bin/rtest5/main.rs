@@ -17,10 +17,10 @@ mod request_generated;
 async fn handle(
     req: Request<Body>,
     mut tx: Sender<Vec<u8>>,
-    pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>>,
+    // pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>>,
 ) -> Result<Response<Body>, Infallible> {
-    // let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
-    let mut builder = pool.try_pull().expect("unable to get item from pool");
+    let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
+    // let mut builder = pool.try_pull().expect("unable to get item from pool");
 
     let id = builder.create_string("");
     let method = builder.create_string(req.method().as_str());
@@ -94,6 +94,9 @@ async fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
 #[tokio::main]
 async fn main() {
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(1000);
+    //let pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>> = Arc::new(Pool::new(100, || {
+    //    Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096))
+    //}));
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
@@ -109,13 +112,10 @@ async fn main() {
         // that is it must be done *now*, not in future.
         let tx = tx.clone();
         // tx is now a separate clone for each instance of http-connection
+        // let pool = pool.clone();
 
         async /* move */ { // move keyword seems optional here - find out why
 
-            let pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>> =
-                Arc::new(Pool::new(100, || {
-                    Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096))
-                }));
 
             // move keyword is very much required in the closure below
             // this function is called for each request. Needs a separate tx clone.
@@ -128,8 +128,8 @@ async fn main() {
             // at ..... make_service_fn(|_conn|... closure..above
             Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
 
-                //let pool = pool.clone();
-                handle(req, tx.clone(), pool.clone())
+                handle(req, tx.clone())
+                // handle(req, tx.clone(), pool.clone())
             }))
         }
     });
