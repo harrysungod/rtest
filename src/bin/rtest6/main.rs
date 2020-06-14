@@ -13,7 +13,7 @@ async fn handle(req: Request<Body>, mut tx: Sender<Vec<u8>>) -> Result<Response<
         .await
         .expect("unable to write to channel");
 
-    let resp_message = "OK";
+    let resp_message = "OK\n";
     Ok(Response::new(resp_message.into()))
 }
 
@@ -31,7 +31,7 @@ async fn main() {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    tokio::spawn(async move { receiver(rx) });
+    tokio::spawn(async move { receiver(rx).await });
 
     let make_svc = make_service_fn(|_conn| {
         // we must clone the 'tx' to be something owned by the closure

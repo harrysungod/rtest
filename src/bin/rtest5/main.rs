@@ -1,7 +1,12 @@
 use flatbuffers::FlatBufferBuilder;
 use hyper::body;
+use hyper::body::Buf;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server};
+use lz4;
+use object_pool::Pool;
+use std::io::Write;
+use std::sync::Arc;
 use std::{convert::Infallible, net::SocketAddr};
 use tokio::fs;
 use tokio::sync::mpsc;
@@ -9,14 +14,13 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 mod request_generated;
 
-use hyper::body::Buf;
-use tokio::io::AsyncWriteExt;
-
 async fn handle(
     req: Request<Body>,
-    mut tx: Sender<Box<flatbuffers::FlatBufferBuilder<'_>>>,
+    mut tx: Sender<Vec<u8>>,
+    pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>>,
 ) -> Result<Response<Body>, Infallible> {
-    let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
+    // let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
+    let mut builder = pool.try_pull().expect("unable to get item from pool");
 
     let id = builder.create_string("");
     let method = builder.create_string(req.method().as_str());
@@ -43,32 +47,39 @@ async fn handle(
     );
 
     builder.finish(buf, None);
-
-    tx.send(builder).await.expect("unable to write to channel");
+    let finished_bytes_vec = builder.finished_data().to_vec().clone();
+    tx.send(finished_bytes_vec)
+        .await
+        .expect("unable to write to channel");
 
     /*
     let finished_data = builder.finished_data();
     let resp_message = format!("Marshalled to {} bytes\n", finished_data.len());
     */
-    let resp_message = "OK";
+    let resp_message = "OK\n";
     Ok(Response::new(resp_message.into()))
 }
 
-async fn recorder(file_name: String, mut rx: Receiver<Box<flatbuffers::FlatBufferBuilder<'_>>>) {
+async fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
     println!("Starting recorder");
 
-    let mut file = tokio::fs::File::create(file_name)
-        .await
-        .expect("Unable to create file");
+    let mut file = std::fs::File::create(file_name).expect("Unable to create file");
 
-    let mut total_received = 0;
+    let mut encoder = lz4::EncoderBuilder::new()
+        .level(4)
+        .build(file)
+        .expect("Unable to init lz4");
+
+    let mut total_received: i32 = 0;
     let mut total_size = 0;
 
-    while let Some(builder) = rx.recv().await {
-        let raw_bytes = builder.finished_data();
-        file.write(raw_bytes).await.expect("write failed");
+    while let Some(finished_data) = rx.recv().await {
+        encoder
+            .write(finished_data.as_slice())
+            .expect("write failed");
+
         total_received += 1;
-        total_size += raw_bytes.len();
+        total_size += finished_data.len();
         if total_received % 1000 == 0 {
             println!("Saved {} requests", total_received);
         }
@@ -77,19 +88,16 @@ async fn recorder(file_name: String, mut rx: Receiver<Box<flatbuffers::FlatBuffe
         }
     }
 
-    println!("Sender queueing finished");
+    println!("Recorder thread finished");
 }
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx): (
-        Sender<Box<FlatBufferBuilder>>,
-        Receiver<Box<FlatBufferBuilder>>,
-    ) = mpsc::channel(100);
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(1000);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    tokio::spawn(async move { recorder(String::from("foo.data"), rx) });
+    tokio::spawn(async move { recorder(String::from("foo.data"), rx).await });
 
     // let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
 
@@ -100,24 +108,28 @@ async fn main() {
         // caller, `main`. This must be outside out `async` block below.
         // that is it must be done *now*, not in future.
         let tx = tx.clone();
-
         // tx is now a separate clone for each instance of http-connection
 
         async /* move */ { // move keyword seems optional here - find out why
 
+            let pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'_>>>> =
+                Arc::new(Pool::new(100, || {
+                    Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096))
+                }));
+
             // move keyword is very much required in the closure below
             // this function is called for each request. Needs a separate tx clone.
             //
-            // `move` keywords moves `tx` to inside closure. without it,
+            // `move` keywords moves `tx` to inside closure. without it, 
             // subsequent clones can't be made out of a reference that has disappeared
             //
             // Still a bit confused, but this is all I know at this point.
-            // `move` is required here, it won't compile without it (even if you
-            // add `move` to async block-start above, but why wasn't it required
-            // at ..... make_service_fn(|_conn|... closure..above?
+            // `move` is required here, but why wasn't it required
+            // at ..... make_service_fn(|_conn|... closure..above
             Ok::<_, Infallible>(service_fn(move |req: Request<Body>| {
 
-                handle(req, tx.clone())
+                //let pool = pool.clone();
+                handle(req, tx.clone(), pool.clone())
             }))
         }
     });
