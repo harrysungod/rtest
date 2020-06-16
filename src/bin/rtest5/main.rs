@@ -1,3 +1,4 @@
+use crossbeam::channel::{Receiver, Sender};
 use flatbuffers::FlatBufferBuilder;
 use hyper::body;
 use hyper::body::Buf;
@@ -6,32 +7,35 @@ use hyper::{Body, Request, Response, Server};
 use lz4;
 use object_pool::Pool;
 use std::io::Write;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::{convert::Infallible, net::SocketAddr};
 use tokio::fs;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::io::AsyncWrite;
+use tokio::task;
 
 #[macro_use]
 extern crate lazy_static;
 
 mod request_generated;
 
+/*
 lazy_static! {
     static ref POOL: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'static>>>> =
         Arc::new(Pool::new(1000, || {
             Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096))
         }));
 }
+*/
 
 async fn handle(
     req: Request<Body>,
     mut tx: Sender<Vec<u8>>,
     // pool: Arc<Pool<Box<flatbuffers::FlatBufferBuilder<'static>>>>,
 ) -> Result<Response<Body>, Infallible> {
-    // let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
-    let mut builder = POOL.try_pull().expect("unable to get item from pool");
-    builder.reset();
+    let mut builder = Box::new(flatbuffers::FlatBufferBuilder::new_with_capacity(4096));
+    // let mut builder = POOL.try_pull().expect("unable to get item from pool");
+    //builder.reset();
 
     let id = builder.create_string("");
     let method = builder.create_string(req.method().as_str());
@@ -60,7 +64,6 @@ async fn handle(
     builder.finish(buf, None);
     let finished_bytes_vec = builder.finished_data().to_vec().clone();
     tx.send(finished_bytes_vec)
-        .await
         .expect("unable to write to channel");
 
     /*
@@ -71,8 +74,10 @@ async fn handle(
     Ok(Response::new(resp_message.into()))
 }
 
-async fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
+fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
     println!("Starting recorder");
+
+    // let mut file = std::fs::File::create(file_name).expect("Unable to create file");
 
     let mut file = std::fs::File::create(file_name).expect("Unable to create file");
 
@@ -84,7 +89,7 @@ async fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
     let mut total_received: i32 = 0;
     let mut total_size = 0;
 
-    while let Some(finished_data) = rx.recv().await {
+    while let Ok(finished_data) = rx.recv() {
         encoder
             .write(finished_data.as_slice())
             .expect("write failed");
@@ -104,11 +109,15 @@ async fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
 
 #[tokio::main]
 async fn main() {
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(1000);
+    let (tx, mut rx) = crossbeam::channel::bounded(100);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
-    tokio::spawn(async move { recorder(String::from("foo.data"), rx).await });
+    for i in 0..5 {
+        let rx = rx.clone();
+        let file_name = format!("foo{}.data", i);
+        task::spawn_blocking(move || recorder(file_name, rx));
+    }
 
     // let make_svc = make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(handle)) });
 
