@@ -82,7 +82,7 @@ fn recorder(file_name: String, mut rx: Receiver<Vec<u8>>) {
     let mut file = std::fs::File::create(file_name).expect("Unable to create file");
 
     let mut encoder = lz4::EncoderBuilder::new()
-        .level(4)
+        .level(0)
         .build(file)
         .expect("Unable to init lz4");
 
